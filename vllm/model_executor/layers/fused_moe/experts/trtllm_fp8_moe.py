@@ -79,12 +79,33 @@ class TrtLlmFp8ExpertsBase:
             activation_key,
             activation_format,
         )
-        if not supported or moe_config.num_experts <= 2048:
+        if not supported:
             return supported, reason
-        return False, (
-            "FlashInfer TRTLLM routing supports at most 2048 experts, "
-            f"but got {moe_config.num_experts}"
+        if moe_config.num_experts > 2048:
+            return False, (
+                "FlashInfer TRTLLM routing supports at most 2048 experts, "
+                f"but got {moe_config.num_experts}"
+            )
+        # FlashInfer's fp8 block-scale MoE kernels support the SwiGLU
+        # alpha/beta/limit parameters for MXFP8 only: older FlashInfer
+        # silently drops them (corrupted outputs, #53411), the pinned version
+        # raises at the first forward. FlashInfer >= 0.6.18 adds support
+        # (flashinfer-ai/flashinfer#4405); re-enable once the pin is bumped
+        # and accuracy is validated.
+        has_swiglu_params = (
+            moe_config.swiglu_limit is not None
+            or moe_config.swiglu_alpha is not None
+            or moe_config.swiglu_beta is not None
         )
+        if has_swiglu_params and (weight_key, activation_key) == (
+            kFp8Static128BlockSym,
+            kFp8Dynamic128Sym,
+        ):
+            return False, (
+                "FlashInfer TRTLLM applies SwiGLU alpha/beta/limit only for "
+                "MXFP8, not fp8 block scale; use deep_gemm or triton instead"
+            )
+        return True, None
 
     def __init__(
         self,
